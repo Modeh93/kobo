@@ -1,0 +1,5 @@
+streamlit
+openpyxl
+requests
+pandas
+pyreadstat
