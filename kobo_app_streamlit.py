@@ -689,43 +689,40 @@ def main():
         horizontal=True,
     )
 
-    # ── OUTPUT PATH ──────────────────────────────────────────────
-    st.subheader("📁 Output Path  (on server)")
-    default_out = cfg.get("out", os.path.join(os.path.expanduser("~"),
-                                               "kobo_export.xlsx"))
-    if out_fmt == "spss":
-        default_out = default_out.replace(".xlsx", ".sav")
-        if not default_out.endswith(".sav"):
-            default_out = os.path.splitext(default_out)[0] + ".sav"
-    else:
-        default_out = default_out.replace(".sav", ".xlsx")
-        if not default_out.endswith(".xlsx"):
-            default_out = os.path.splitext(default_out)[0] + ".xlsx"
-
-    out_path = st.text_input(
-        "Output path", value=default_out,
+    # ── OUTPUT FILENAME ──────────────────────────────────────────
+    st.subheader("📄 Output Filename")
+    default_name = cfg.get("filename", "kobo_export")
+    out_name = st.text_input(
+        "Filename (without extension)", value=default_name,
         label_visibility="collapsed",
-        help="Full path on the server where the file will be saved",
+        placeholder="kobo_export",
+        help="اسم الملف اللي رح يتنزّل — بدون امتداد",
     )
+    ext      = ".sav" if out_fmt == "spss" else ".xlsx"
+    out_name = (out_name.strip() or "kobo_export") + ext
+
+    # Temp folder for processing (cleaned up after download)
+    out_dir  = tempfile.mkdtemp()
+    out_path = os.path.join(out_dir, out_name)
 
     # ── ATTACHMENTS ──────────────────────────────────────────────
     st.subheader("📎 Attachments")
     dl_att = st.checkbox(
         "Download attachments",
         value=cfg.get("att", False),
-        help="Downloads files into attachments/images|audio|video|other/ next to the output file",
+        help="ينزّل المرفقات مع الملف كـ ZIP واحد",
     )
     if dl_att:
-        att_dir = os.path.join(os.path.dirname(os.path.abspath(out_path)), "attachments")
         st.info(
-            f"📁 `{att_dir}/`\n"
+            "📁 `attachments/`\n"
             "```\n"
             "├── 🖼  images/\n"
             "├── 🔊  audio/\n"
             "├── 🎬  video/\n"
             "└── 📄  other/\n"
             "```\n"
-            "Columns added to Excel: `attachment_url` · `attachment_local_path`"
+            "إذا في مرفقات: سيتم تحميل كل شيء كـ ZIP · "
+            "الإكسل يحتوي عمود attachment_url و attachment_local_path"
         )
         if out_fmt == "spss":
             st.warning("⚠️ Attachments are only injected into Excel files, not SPSS.")
@@ -742,7 +739,7 @@ def main():
     if st.button("⬇️  Download", use_container_width=True,
                  type="primary", disabled=not ready):
 
-        save_cfg({"url": kobo_url, "token": token, "out": out_path,
+        save_cfg({"url": kobo_url, "token": token, "filename": out_name.replace(".xlsx","").replace(".sav",""),
                   "fmt": fmt, "hdr": hdr, "att": dl_att})
 
         # ── Live log + progress ──────────────────────────────────
@@ -753,7 +750,7 @@ def main():
         def log(msg):
             ts = datetime.now().strftime("%H:%M:%S")
             log_lines.append(f"[{ts}] {msg}")
-            log_box.code("\n".join(log_lines[-30:]))  # show last 30 lines
+            log_box.code("\n".join(log_lines[-30:]))
 
         def prog(v):
             prog_bar.progress(min(int(v), 100))
@@ -764,7 +761,7 @@ def main():
             log(f"Form: {project['name']}")
             log(f"Format: {fmt.upper()}  |  Headers: {hdr.capitalize()}"
                 + ("  |  +Attachments" if dl_att else ""))
-            log(f"Date: {d_from or 'all'} → {d_to or 'all'}")
+            log(f"Date: {d_from or 'all'} \u2192 {d_to or 'all'}")
 
             # 1. Download raw export
             tmp = download_kobo_export(token, kobo_url, uid, d_from, d_to, log, prog)
@@ -776,11 +773,10 @@ def main():
                 schema = fetch_survey_schema(token, kobo_url.rstrip("/"), uid)
                 log(f"  Schema: {len(schema)} elements")
             except Exception as se:
-                log(f"  Schema unavailable ({se}) — using fallback ordering")
+                log(f"  Schema unavailable ({se}) \u2014 using fallback ordering")
 
             # 3. Process & write output
             log(f"Processing ({fmt} / {out_fmt})...")
-            os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
 
             if out_fmt == "spss":
                 sheets = rebuild_to_sheets(tmp, fmt, "short", log, prog, schema=schema)
@@ -794,12 +790,13 @@ def main():
                 os.remove(tmp)
 
             # 4. Attachments
+            has_attachments = False
             if dl_att and out_fmt == "excel":
-                log("─── Attachments ───────────────────")
+                log("\u2500\u2500\u2500 Attachments \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500")
                 attach_map = fetch_submissions_with_attachments(
                     token, kobo_url.rstrip("/"), uid, d_from, d_to, log)
                 if attach_map:
-                    out_dir = os.path.dirname(os.path.abspath(out_path))
+                    has_attachments = True
                     attach_result = download_attachments(
                         token, attach_map, out_dir, log,
                         prog_cb=lambda v: prog(v))
@@ -809,31 +806,55 @@ def main():
                     log("  No attachments found.")
 
             prog(100)
-            log(f"✅ Done! Saved to: {out_path}")
+            log("\u2705 Done!")
 
-            # ── Download button for browser ──────────────────────
-            if out_fmt == "excel" and os.path.exists(out_path):
+            # ── Deliver file(s) to browser ───────────────────────
+            import zipfile, io as _io
+
+            if has_attachments:
+                # Bundle Excel + attachments folder into one ZIP
+                log("Creating ZIP with attachments...")
+                zip_buf = _io.BytesIO()
+                att_base = os.path.join(out_dir, "attachments")
+                with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                    zf.write(out_path, out_name)
+                    for root, _, files in os.walk(att_base):
+                        for fname in files:
+                            full = os.path.join(root, fname)
+                            arcname = os.path.relpath(full, out_dir)
+                            zf.write(full, arcname)
+                zip_buf.seek(0)
+                zip_name = out_name.replace(".xlsx","").replace(".sav","") + ".zip"
+                st.download_button(
+                    label="\u2b07\ufe0f  Download ZIP (Excel + Attachments)",
+                    data=zip_buf,
+                    file_name=zip_name,
+                    mime="application/zip",
+                    use_container_width=True,
+                )
+                log(f"ZIP ready: {zip_name}")
+            elif out_fmt == "excel" and os.path.exists(out_path):
                 with open(out_path, "rb") as f:
                     st.download_button(
-                        label="⬇️  Download Excel file",
+                        label="\u2b07\ufe0f  Download Excel file",
                         data=f,
-                        file_name=os.path.basename(out_path),
+                        file_name=out_name,
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         use_container_width=True,
                     )
             elif out_fmt == "spss" and os.path.exists(out_path):
                 with open(out_path, "rb") as f:
                     st.download_button(
-                        label="⬇️  Download SPSS file",
+                        label="\u2b07\ufe0f  Download SPSS file",
                         data=f,
-                        file_name=os.path.basename(out_path),
+                        file_name=out_name,
                         mime="application/octet-stream",
                         use_container_width=True,
                     )
-            st.success(f"✅ File saved on server: `{out_path}`")
+            st.success("\u2705 File is ready — click the button above to download")
 
         except Exception as e:
-            log(f"✗ Error: {e}")
+            log(f"\u2717 Error: {e}")
             st.error(f"Failed: {e}")
 
 
