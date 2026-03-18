@@ -806,56 +806,79 @@ def main():
                     log("  No attachments found.")
 
             prog(100)
-            log("\u2705 Done!")
+            prog(100)
+            log("✅ Done!")
 
-            # ── Deliver file(s) to browser ───────────────────────
-            import zipfile, io as _io
+            # ── Store results in session_state for download buttons ──
+            import io as _io, zipfile
 
+            # Data file bytes
+            if os.path.exists(out_path):
+                with open(out_path, "rb") as f:
+                    st.session_state["data_bytes"]     = f.read()
+                    st.session_state["data_filename"]  = out_name
+                    st.session_state["data_mime"]      = (
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        if out_fmt == "excel" else "application/octet-stream"
+                    )
+
+            # Attachments ZIP bytes
             if has_attachments:
-                # Bundle Excel + attachments folder into one ZIP
-                log("Creating ZIP with attachments...")
-                zip_buf = _io.BytesIO()
+                log("Creating attachments ZIP...")
                 att_base = os.path.join(out_dir, "attachments")
+                zip_buf  = _io.BytesIO()
                 with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                    zf.write(out_path, out_name)
                     for root, _, files in os.walk(att_base):
                         for fname in files:
-                            full = os.path.join(root, fname)
+                            full    = os.path.join(root, fname)
                             arcname = os.path.relpath(full, out_dir)
                             zf.write(full, arcname)
                 zip_buf.seek(0)
-                zip_name = out_name.replace(".xlsx","").replace(".sav","") + ".zip"
+                st.session_state["att_bytes"]    = zip_buf.read()
+                st.session_state["att_filename"] = (
+                    out_name.replace(".xlsx","").replace(".sav","") + "_attachments.zip"
+                )
+                log("✅ Attachments ZIP ready")
+            else:
+                st.session_state.pop("att_bytes", None)
+                st.session_state.pop("att_filename", None)
+
+        except Exception as e:
+            log(f"✗ Error: {e}")
+            st.error(f"Failed: {e}")
+
+    # ── Download buttons — always visible after processing ───────
+    if st.session_state.get("data_bytes"):
+        st.divider()
+        st.markdown("### ⬇️ Download")
+        col1, col2 = st.columns(2)
+
+        with col1:
+            lbl = "📊 Download Data (Excel)" if out_fmt == "excel" else "📊 Download Data (SPSS)"
+            st.download_button(
+                label=lbl,
+                data=st.session_state["data_bytes"],
+                file_name=st.session_state["data_filename"],
+                mime=st.session_state["data_mime"],
+                use_container_width=True,
+                type="primary",
+            )
+
+        with col2:
+            if st.session_state.get("att_bytes"):
                 st.download_button(
-                    label="\u2b07\ufe0f  Download ZIP (Excel + Attachments)",
-                    data=zip_buf,
-                    file_name=zip_name,
+                    label="📎 Download Attachments (ZIP)",
+                    data=st.session_state["att_bytes"],
+                    file_name=st.session_state["att_filename"],
                     mime="application/zip",
                     use_container_width=True,
                 )
-                log(f"ZIP ready: {zip_name}")
-            elif out_fmt == "excel" and os.path.exists(out_path):
-                with open(out_path, "rb") as f:
-                    st.download_button(
-                        label="\u2b07\ufe0f  Download Excel file",
-                        data=f,
-                        file_name=out_name,
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True,
-                    )
-            elif out_fmt == "spss" and os.path.exists(out_path):
-                with open(out_path, "rb") as f:
-                    st.download_button(
-                        label="\u2b07\ufe0f  Download SPSS file",
-                        data=f,
-                        file_name=out_name,
-                        mime="application/octet-stream",
-                        use_container_width=True,
-                    )
-            st.success("\u2705 File is ready — click the button above to download")
-
-        except Exception as e:
-            log(f"\u2717 Error: {e}")
-            st.error(f"Failed: {e}")
+            else:
+                st.button(
+                    "📎 No Attachments",
+                    disabled=True,
+                    use_container_width=True,
+                )
 
 
 if __name__ == "__main__":
